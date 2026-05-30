@@ -19,6 +19,10 @@ struct Args {
     /// TashTalk serial port path (LocalTalk)
     #[arg(short, long)]
     tashtalk: Option<String>,
+
+    /// Pin a fixed LocalTalk node number instead of probing for a free one
+    #[arg(short, long)]
+    node: Option<u8>,
 }
 
 #[tokio::main]
@@ -43,6 +47,9 @@ async fn main() {
     }
     if let Some(ref tty) = args.tashtalk {
         builder = builder.localtalk(tty);
+    }
+    if let Some(node) = args.node {
+        builder = builder.fixed_address(0, node);
     }
     let stack = builder.build().await.expect("failed to build AppleTalk stack");
 

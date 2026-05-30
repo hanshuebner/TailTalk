@@ -309,6 +309,16 @@ impl Nbp {
         let mut tuples = Vec::new();
 
         for req_tuple in &nbp.tuples {
+            tracing::debug!(
+                "NBP lookup tuple: object={:?} type={:?} zone={:?}; registered={:?}",
+                req_tuple.entity_name.object,
+                req_tuple.entity_name.entity_type,
+                req_tuple.entity_name.zone,
+                self.registered_names
+                    .iter()
+                    .map(|n| format!("{}:{}@{}", n.name.object, n.name.entity_type, n.name.zone))
+                    .collect::<Vec<_>>(),
+            );
             for name in &self.registered_names {
                 if name.name.matches(&req_tuple.entity_name) {
                     tuples.push(NbpTuple {

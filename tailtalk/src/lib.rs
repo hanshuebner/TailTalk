@@ -971,10 +971,14 @@ impl TalkStackBuilder {
         // LocalTalk short-DDP carries no network number (implying 0), so we
         // must stay on network 0 to keep addresses consistent end-to-end.
         let lt_addressing = if self.localtalk_serial_path.is_some() {
-            let lt_fixed = Some(tailtalk_packets::aarp::AppleTalkAddress {
-                network_number: 0,
-                node_number: rand::rng().random_range(1..=253u8),
-            });
+            // Honour a caller-pinned node on LocalTalk too; otherwise pick
+            // a random one on network 0 (LocalTalk short-DDP implies net 0).
+            let lt_fixed = Some(self.fixed_addr.unwrap_or(
+                tailtalk_packets::aarp::AppleTalkAddress {
+                    network_number: 0,
+                    node_number: rand::rng().random_range(1..=253u8),
+                },
+            ));
             Some(addressing::Addressing::spawn(None, outbound.clone(), lt_fixed))
         } else {
             None
