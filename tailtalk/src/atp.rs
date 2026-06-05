@@ -43,13 +43,13 @@ pub struct AtpSendRequest {
     pub chan: AtpResponseChannel,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AtpResponse {
     pub data: Vec<u8>,
     pub user_bytes: [u8; 4],
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AtpSendResponse {
     pub destination: AtpAddress,
     pub tid: u16,
@@ -230,6 +230,14 @@ pub struct Atp {
     pending_transactions: AtpTransactionMap,
     // Map (Source, TID) to release signal channel
     pending_releases: HashMap<(AtpAddress, u16), oneshot::Sender<()>>,
+    // XO response cache: when we send a response for an XO transaction,
+    // cache it so retransmissions of the same TReq get the cached
+    // response replayed instead of dispatching a new request upstream.
+    // Entries are removed on TRelease.
+    xo_response_cache: HashMap<(AtpAddress, u16), AtpSendResponse>,
+    // Track in-flight XO requests so we don't dispatch duplicates
+    // while the upper layer is still processing the first one.
+    xo_pending: std::collections::HashSet<(AtpAddress, u16)>,
     next_tid: u16,
 }
 
@@ -255,6 +263,8 @@ impl Atp {
             cmd_tx: request_send.clone(),
             pending_transactions: HashMap::new(),
             pending_releases: HashMap::new(),
+            xo_response_cache: HashMap::new(),
+            xo_pending: std::collections::HashSet::new(),
             next_tid: 1, // Start TID at 1
         };
 
@@ -409,6 +419,17 @@ impl Atp {
     }
 
     async fn handle_send_response(&mut self, resp: AtpSendResponse) {
+        // Cache for XO retransmission replay. Also clear the in-flight flag.
+        let key = (resp.destination, resp.tid);
+        self.xo_pending.remove(&key);
+        // Evict oldest entries if cache grows too large (TRelease lost).
+        if self.xo_response_cache.len() >= 64 {
+            if let Some(&oldest_key) = self.xo_response_cache.keys().next() {
+                self.xo_response_cache.remove(&oldest_key);
+            }
+        }
+        self.xo_response_cache.insert(key, resp.clone());
+
         for (i, node) in resp.packets.iter().enumerate() {
             let packet = AtpPacket {
                 function: AtpFunction::Response,
@@ -528,21 +549,46 @@ impl Atp {
         match packet.function {
             AtpFunction::Request => {
                 // Server-side: dispatch to responder
+                let from = AtpAddress {
+                    network_number: ddp.src_network_num,
+                    node_number: ddp.src_node_id,
+                    socket_number: ddp.src_sock_num,
+                };
+                let key = (from, packet.tid);
+
+                // XO deduplication: if we already have a cached response
+                // for this (source, tid), replay it instead of dispatching
+                // a new request. This handles Mac retransmissions correctly.
+                if packet.xo {
+                    if let Some(cached) = self.xo_response_cache.get(&key) {
+                        tracing::debug!(
+                            "ATP: replaying cached XO response for TID {} from {:?}",
+                            packet.tid, from
+                        );
+                        self.handle_send_response(cached.clone()).await;
+                        return;
+                    }
+                    // If this TID is already being processed upstream,
+                    // don't dispatch a duplicate — just ignore silently.
+                    if self.xo_pending.contains(&key) {
+                        tracing::debug!(
+                            "ATP: ignoring duplicate XO TReq TID {} from {:?} (in flight)",
+                            packet.tid, from
+                        );
+                        return;
+                    }
+                    self.xo_pending.insert(key);
+                }
+
                 let request_data = if payload.len() > AtpPacket::HEADER_LEN {
                     payload[AtpPacket::HEADER_LEN..].to_vec()
                 } else {
                     Vec::new()
                 };
 
-                let from = AtpAddress {
-                    network_number: ddp.src_network_num,
-                    node_number: ddp.src_node_id,
-                    socket_number: ddp.src_sock_num,
-                };
-
                 let release_rx = if packet.xo {
                     let (tx, rx) = oneshot::channel();
-                    self.pending_releases.insert((from, packet.tid), tx);
+                    self.pending_releases.insert(key, tx);
                     Some(rx)
                 } else {
                     None
@@ -635,7 +681,10 @@ impl Atp {
                     packet.tid
                 );
 
-                if let Some(chan) = self.pending_releases.remove(&(from, packet.tid)) {
+                let key = (from, packet.tid);
+                self.xo_response_cache.remove(&key);
+                self.xo_pending.remove(&key);
+                if let Some(chan) = self.pending_releases.remove(&key) {
                     let _ = chan.send(());
                 }
             }
