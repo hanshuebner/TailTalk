@@ -19,6 +19,31 @@ struct Args {
     /// TashTalk serial port path (LocalTalk)
     #[arg(short, long)]
     tashtalk: Option<String>,
+
+    /// Server name, as it appears in the Chooser
+    #[arg(short, long)]
+    name: Option<String>,
+
+    /// Volume name, as it appears on the client's desktop
+    #[arg(long)]
+    volume_name: Option<String>,
+}
+
+/// NBP carries the server name as a Pascal string, and AppleTalk allows an
+/// object name of 32 characters.
+const MAX_SERVER_NAME: usize = 32;
+
+/// AFP 1.x and 2.x carry a Macintosh volume name, which is 27 characters.
+const MAX_VOLUME_NAME: usize = 27;
+
+/// MacRoman spends one byte per character, so counting characters counts the
+/// bytes that go on the wire.
+fn check_length(what: &str, value: &str, max: usize) {
+    let length = value.chars().count();
+    if length == 0 || length > max {
+        eprintln!("error: --{what} must be 1 to {max} characters, got {length}");
+        std::process::exit(1);
+    }
 }
 
 #[tokio::main]
@@ -37,6 +62,13 @@ async fn main() {
         std::process::exit(1);
     }
 
+    if let Some(ref name) = args.name {
+        check_length("name", name, MAX_SERVER_NAME);
+    }
+    if let Some(ref volume_name) = args.volume_name {
+        check_length("volume-name", volume_name, MAX_VOLUME_NAME);
+    }
+
     let mut builder = TalkStack::builder();
     if let Some(ref intf) = args.interface {
         builder = builder.ethernet(intf);
@@ -46,10 +78,16 @@ async fn main() {
     }
     let stack = builder.build().await.expect("failed to build AppleTalk stack");
 
-    let afp_config = AfpServerConfig {
+    let mut afp_config = AfpServerConfig {
         volume_path: args.path.clone(),
         ..AfpServerConfig::default()
     };
+    if let Some(name) = args.name.clone() {
+        afp_config.server_name = name;
+    }
+    if let Some(volume_name) = args.volume_name.clone() {
+        afp_config.volume_name = volume_name;
+    }
 
     let _afp_server = stack.spawn_afp(Some(254), afp_config)
         .await
