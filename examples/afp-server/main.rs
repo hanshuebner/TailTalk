@@ -27,6 +27,10 @@ struct Args {
     /// Volume name, as it appears on the client's desktop
     #[arg(long)]
     volume_name: Option<String>,
+
+    /// Serve the volume as a locked disk
+    #[arg(short, long)]
+    read_only: bool,
 }
 
 /// NBP carries the server name as a Pascal string, and AppleTalk allows an
@@ -80,6 +84,7 @@ async fn main() {
 
     let mut afp_config = AfpServerConfig {
         volume_path: args.path.clone(),
+        read_only: args.read_only,
         ..AfpServerConfig::default()
     };
     if let Some(name) = args.name.clone() {

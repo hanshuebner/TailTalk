@@ -29,6 +29,8 @@ pub struct AfpServerConfig {
     pub volume_path: PathBuf,
     /// The volume name shown to AFP clients.
     pub volume_name: String,
+    /// Serve the volume as a locked disk.
+    pub read_only: bool,
 }
 
 impl Default for AfpServerConfig {
@@ -63,6 +65,7 @@ impl Default for AfpServerConfig {
             flags: 0x3,
             volume_path: PathBuf::from("./"),
             volume_name: "MacShare".to_string(),
+            read_only: false,
         }
     }
 }
@@ -185,6 +188,7 @@ impl AspSession {
             desktop_db.clone(),
         )
         .await;
+        our_volume.set_read_only(config.read_only);
 
         loop {
             // Get command from client

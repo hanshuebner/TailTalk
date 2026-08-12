@@ -361,6 +361,8 @@ pub struct Volume {
     fork_locks: HashMap<u16, Vec<(u64, u64)>>,
     desktop_database: crate::afp::DesktopDatabase,
     mangle_tree: sled::Tree,
+    /// Reported to the client as bit 0 of the volume attributes.
+    read_only: bool,
 }
 
 /// Returns the path to the resource fork sidecar for a given file.
@@ -487,6 +489,7 @@ impl Volume {
             fork_locks: HashMap::new(),
             desktop_database,
             mangle_tree,
+            read_only: false,
         };
 
         // Initialize Vol Node (Parent of Root)
@@ -989,9 +992,14 @@ impl Volume {
     /// Get volume parameters for FPGetVolParms
     /// Returns the attributes flags for AFP. Currently only bit 0 is relevant, which signifies if
     /// this volume is read-only or not.
-    // TODO: Currently hard coded to 0 (read/write)
     pub fn get_attributes(&self) -> u16 {
-        0
+        u16::from(self.read_only)
+    }
+
+    /// Present the volume as read only, which shows on the client as a locked
+    /// disk that it will not offer to write to.
+    pub fn set_read_only(&mut self, read_only: bool) {
+        self.read_only = read_only;
     }
 
     /// Returns the creation time of the volume as a u32 in Macintosh time format.
